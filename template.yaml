@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  POC-OCR-synchronous-text-detection
+
+Parameters:
+  IamRoleArnForLambda1:
+    Description: The ARN for IAM role for Lambda function.
+    Type: String
+    Default: 'arn:aws:iam::ACCOUNT_ID:role/poc-stack-iam-roles-LambdaExecutionRole1'
+  SnsSubscriptionEmail:
+    Description: The email address for the SNS subscription.
+    Type: String
+    Default: 'dev@example.com'
+
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+  # Create an Amazon API Gateway
+  ApiGatewayForAPIs:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Auth:
+        UsagePlan:
+          CreateUsagePlan: SHARED
+          Description: The Usage Plan is for traffic control of [foo] requests.
+          # Quota: QuotaSettings
+          # Tags: List
+          Throttle:
+            BurstLimit: 50
+            RateLimit: 10
+          # UsagePlanName: String
+        ApiKeyRequired: true # sets for all methods
+      BinaryMediaTypes:
+        - 'image~1*'
+
+  # TheSNS Topic for Lambda on Success
+  SnsTopicForLambdaOnSuccess:
+    Type: AWS::SNS::Topic
+
+  # TheSNS Topic for Lambda on Success
+  SnsTopicForLambdaOnFail:
+    Type: AWS::SNS::Topic
+
+  # Lambda Function Scan PDF
+  TextDetectionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Detect text in file synchronously using Amazon Textract - DetectDocumentText API.
+      CodeUri: src/
+      Handler: lambda_text_detection.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - arm64
+      Timeout: 300
+      MemorySize: 1024
+      Role: !Ref IamRoleArnForLambda1
+      Tracing: Active
+      EventInvokeConfig:
+        DestinationConfig:
+          OnFailure:
+            Type: SNS
+            Destination: !Ref SnsTopicForLambdaOnFail
+          OnSuccess:
+            Type: SNS
+            Destination: !Ref SnsTopicForLambdaOnSuccess
+        MaximumEventAgeInSeconds: 600
+        MaximumRetryAttempts: 2
+      Events:
+        ApiRequestFromGateway:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayForAPIs
+            Path: /text-detection/{source}/{return_format}/
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+Outputs:
+  AiPlatformApi:
+    Description: "API Gateway endpoint URL for Prod stage for the AI platform"
+    Value: !Sub "https://${ApiGatewayForAPIs}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
